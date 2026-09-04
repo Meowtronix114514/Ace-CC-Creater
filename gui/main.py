@@ -61,7 +61,10 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title('Ace-CC-Creater')
-        self.geometry('640x840')
+        # 高度自适应屏幕(避免小屏幕窗口超出可视区, 底部按钮被截掉)
+        sw = self.winfo_screenwidth(); sh = self.winfo_screenheight()
+        w = min(660, sw - 80); h = min(820, sh - 140)
+        self.geometry(f'{max(560, w)}x{max(480, h)}')
         self.cfg = dict(A.DEFAULT)
         self.vars = {}
         self._source = tk.StringVar(value=SOURCES[0][1])
@@ -75,11 +78,35 @@ class App(tk.Tk):
         self._load_instrument_default()
 
     # ============ UI 构建 ============
+    def _make_scrollable_body(self):
+        """创建一个可垂直滚动的 body 容器(小屏幕也能滚到底看到生成按钮)。"""
+        container = ttk.Frame(self)
+        container.pack(fill='both', expand=True)
+        canvas = tk.Canvas(container, highlightthickness=0, borderwidth=0)
+        vsb = ttk.Scrollbar(container, orient='vertical', command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side='right', fill='y')
+        canvas.pack(side='left', fill='both', expand=True)
+        body = ttk.Frame(canvas)
+        win = canvas.create_window((0, 0), window=body, anchor='nw')
+        def _on_body_cfg(_e):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        def _on_canvas_cfg(e):
+            canvas.itemconfig(win, width=e.width)
+        body.bind('<Configure>', _on_body_cfg)
+        canvas.bind('<Configure>', _on_canvas_cfg)
+        def _wheel(e):
+            canvas.yview_scroll(int(-e.delta / 120), 'units')
+        canvas.bind_all('<MouseWheel>', _wheel)
+        self._body = body
+
     def _build(self):
         pad = {'padx': 10, 'pady': 4}
+        self._make_scrollable_body()
+        B = self._body  # 内容都挂到可滚动 body
 
         # 0) 音源种类 (打开先选)
-        sf = ttk.LabelFrame(self, text='① 音源种类 与 目标乐器', padding=8)
+        sf = ttk.LabelFrame(B, text='① 音源种类 与 目标乐器', padding=8)
         sf.pack(fill='x', **pad)
         row = ttk.Frame(sf); row.pack(fill='x')
         ttk.Label(row, text='音源:').pack(side='left')
@@ -98,7 +125,7 @@ class App(tk.Tk):
         ttk.Label(row2, text='(载入该乐器默认预设,可再调/另存)', foreground='gray').pack(side='left', padx=8)
 
         # 1) 参数预设 (按乐器目录)
-        pf = ttk.LabelFrame(self, text='② 参数预设 (按乐器目录: 音源/乐器族/乐器)', padding=8)
+        pf = ttk.LabelFrame(B, text='② 参数预设 (按乐器目录: 音源/乐器族/乐器)', padding=8)
         pf.pack(fill='x', **pad)
         brow = ttk.Frame(pf); brow.pack(fill='x')
         ttk.Label(brow, text='预设根目录:').pack(side='left')
@@ -127,7 +154,7 @@ class App(tk.Tk):
         ttk.Button(brow2, text='另存为预设…', command=self._save_as_preset).pack(side='right', padx=4)
 
         # 2) 工程文件 (.acep)
-        fr = ttk.LabelFrame(self, text='③ 工程文件 (.acep)', padding=8)
+        fr = ttk.LabelFrame(B, text='③ 工程文件 (.acep)', padding=8)
         fr.pack(fill='x', **pad)
         row = ttk.Frame(fr); row.pack(fill='x')
         self.inp_var = tk.StringVar()
@@ -140,7 +167,7 @@ class App(tk.Tk):
         ttk.Button(row2, text='浏览…', command=self._pick_out).pack(side='left', padx=4)
 
         # 3) 参数滑块区
-        gp = ttk.LabelFrame(self, text='④ 参数 (载入预设或手动调整)', padding=8)
+        gp = ttk.LabelFrame(B, text='④ 参数 (载入预设或手动调整)', padding=8)
         gp.pack(fill='x', **pad)
         self.widgets = {}
         for key, label, vmin, vmax, step, typ in PARAMS:
@@ -156,7 +183,7 @@ class App(tk.Tk):
         ttk.Button(gp, text='重置为默认', command=self._reset).pack(anchor='e', pady=(6, 0))
 
         # 4) 动作
-        act = ttk.Frame(self); act.pack(fill='x', **pad)
+        act = ttk.Frame(B); act.pack(fill='x', **pad)
         ttk.Button(act, text='生成 MIDI', command=self._generate).pack(side='left')
         self.status = tk.StringVar(value='就绪')
         ttk.Label(act, textvariable=self.status).pack(side='left', padx=12)
