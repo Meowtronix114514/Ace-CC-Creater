@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+
+# 输出(生成的 MIDI / 测试文件)
+output/
+*.mid
+
+# Sample: 只保留示例 .acep,排除渲染音频与自动备份
+Sample/**/autosave/
+Sample/**/Samples/
+*.wav
+*.mp3
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 临时
+*.log
+*.tmp
