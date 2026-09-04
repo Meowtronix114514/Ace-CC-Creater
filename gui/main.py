@@ -174,6 +174,7 @@ class App(tk.Tk):
         ttk.Button(brow2, text='载入所选预设', command=lambda: self._load_selected_preset(confirm=False)).pack(side='right', padx=4)
         ttk.Button(brow2, text='删除所选预设', command=self._delete_selected_preset).pack(side='right', padx=4)
         ttk.Button(brow2, text='另存为预设…', command=self._save_as_preset).pack(side='right', padx=4)
+        ttk.Button(brow2, text='覆盖当前预设', command=self._overwrite_current_preset).pack(side='right', padx=4)
 
         # 2) 工程文件 (.acep)
         fr = ttk.LabelFrame(B, text='③ 工程文件 (.acep)', padding=8)
@@ -545,20 +546,10 @@ class App(tk.Tk):
             except Exception as e:
                 messagebox.showerror('错误', f'无法创建目录: {e}'); return
             out = os.path.join(outdir, preset_name)
-            data = {
-                'meta': {
-                    'source': sid,
-                    'family': fam_name,
-                    'instrument': inst_name,
-                    'label': label_var.get().strip(),
-                },
-                'params': self._slider_values(),
-            }
-            try:
-                with open(out, 'w', encoding='utf-8') as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-            except Exception as e:
-                messagebox.showerror('错误', f'保存失败: {e}'); return
+            ok, err = self._write_preset(out, sid, fam_name, inst_name,
+                                         label_var.get().strip())
+            if not ok:
+                messagebox.showerror('错误', err); return
             state['ok'] = True; state['path'] = out
             win.destroy()
             self._rescan_preset_tree()
@@ -569,6 +560,39 @@ class App(tk.Tk):
         ttk.Button(btns, text='保存', command=_do_save).pack(side='right', padx=4)
         ttk.Button(btns, text='取消', command=win.destroy).pack(side='right', padx=4)
         win.wait_window()
+
+    def _write_preset(self, out, sid, fam, inst, label):
+        """把当前滑块值写入预设文件。返回 (ok, 错误消息或None)。"""
+        data = {
+            'meta': {'source': sid, 'family': fam, 'instrument': inst, 'label': label},
+            'params': self._slider_values(sid),
+        }
+        try:
+            with open(out, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            return False, f'保存失败: {e}'
+        return True, None
+
+    def _overwrite_current_preset(self):
+        """把当前已载入预设覆盖更新为当前滑块值(保留其源/乐器/标签)。"""
+        if not self._cur_preset or not os.path.exists(self._cur_preset):
+            messagebox.showinfo('提示', '还没有载入预设,无法覆盖。请先在目录树载入一个预设。'); return
+        sid = self._sid()
+        # 从当前文件 meta 读取源/乐器族/乐器/标签, 保持文件身份
+        meta = self._read_preset_meta(self._cur_preset) or {}
+        m = meta.get('meta', {})
+        fam = m.get('family') or os.path.basename(os.path.dirname(os.path.dirname(self._cur_preset)))
+        inst = m.get('instrument') or os.path.basename(os.path.dirname(self._cur_preset))
+        label = m.get('label', '')
+        if not messagebox.askyesno('确认覆盖', f'用当前滑块值覆盖此预设?\n{self._cur_preset}'):
+            return
+        ok, err = self._write_preset(self._cur_preset, sid, fam, inst, label)
+        if not ok:
+            messagebox.showerror('错误', err); return
+        self._rescan_preset_tree()
+        self._load_preset_file(self._cur_preset, sid)
+        messagebox.showinfo('完成', f'已覆盖当前预设:\n{self._cur_preset}')
 
     def _delete_selected_preset(self):
         sel = self.tree.selection()
