@@ -1,0 +1,21 @@
+{
+  "meta": {
+    "source": "SWAM",
+    "family": "提琴",
+    "instrument": "小提琴",
+    "label": "默认种子(GM 40), 待校准"
+  },
+  "params": {
+    "amp": 30.0,
+    "attack": 0.2,
+    "release": 0.15,
+    "pbrange": 2.0,
+    "dyn_lo": 0,
+    "dyn_hi": 127,
+    "bow_lo": 45,
+    "bow_hi": 88,
+    "min_sustain": 0.5,
+    "bowpos_val": 64,
+    "instrument": 40
+  }
+}
