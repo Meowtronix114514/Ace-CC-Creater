@@ -226,15 +226,18 @@ class App(tk.Tk):
         for w in self._slider_host_rows:
             w.destroy()
         self._slider_host_rows = []
+        self.vars = {}
         self.widgets = {}
         labs = self._param_labels(sid)
         for key in keys:
             l, vmin, vmax, step, typ = PARAMDEF[key]
             r = ttk.Frame(self._slider_host); r.pack(fill='x', pady=2)
             self.vars[key] = tk.DoubleVar(value=A.DEFAULT.get(key, 0))
+            # 变量 trace: 拖动滑块或程序赋值都实时刷新右侧数字
+            self.vars[key].trace_add('write', lambda *_a, k=key: self._show(k))
             ttk.Label(r, text=labs[key], width=26, anchor='w').pack(side='left')
             s = ttk.Scale(r, from_=vmin, to=vmax, orient='horizontal',
-                          variable=self.vars[key], command=lambda k=key: self._show(k))
+                          variable=self.vars[key])
             s.pack(side='left', fill='x', expand=True, padx=6)
             lbl = ttk.Label(r, text=str(round(A.DEFAULT.get(key, 0), 2)), width=7, anchor='e')
             lbl.pack(side='left')
@@ -586,6 +589,8 @@ class App(tk.Tk):
 
     # ============ 通用 ============
     def _show(self, key):
+        if key not in self.vars or key not in self.widgets:
+            return  # 旧 trace 在滑块重建后回调时防御
         v = self.vars[key].get()
         _, lbl = self.widgets[key]
         lbl.config(text=('%.2f' % v) if isinstance(v, float) and v != int(v) else str(int(round(v))))
