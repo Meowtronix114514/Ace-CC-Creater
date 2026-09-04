@@ -18,41 +18,62 @@ from core import ace2swam as A
 
 PRESETS_ROOT = APP / 'presets'
 
-# ---- 音源种类: (内部名, 显示名) ----
-# 目前只做了 SWAM 弦乐; 以后加其它音源直接在此追加。
-SOURCES = [
-    ('SWAM', 'SWAM Solo Strings'),
-]
-
-# ---- 每音源的乐器族/乐器注册表: 源 -> dict(family=乐器族, instruments=[(乐器名, GM program)]) ----
-# GM 提琴音色号: 小提琴40 / 中提琴41 / 大提琴42 / 低音提琴43
+# ---- 音源注册表 ----
+# 每个源含: family(乐器族), instruments=[(乐器名, GM program)],
+#           scheme(core 的 CC 方案覆盖), params(GUI 滑块: 顺序 list of key),
+#           PARAMDEF(全部可调滑块定义: key->(标签,min,max,step,type)).
+# GM 音色号(0 起): 提琴: 小提40/中提41/大提42/低音提琴43; 铜管: 小号56/圆号60/长号57/大号58
 SOURCE_INSTRUMENTS = {
     'SWAM': {
         'family': '提琴',
         'instruments': [
-            ('小提琴', 40),
-            ('中提琴', 41),
-            ('大提琴', 42),
-            ('低音提琴', 43),
+            ('小提琴', 40), ('中提琴', 41), ('大提琴', 42), ('低音提琴', 43),
+        ],
+    },
+    'CSB': {
+        'family': '铜管',
+        'instruments': [
+            ('小号', 56), ('圆号', 60), ('长号', 57), ('大号', 58),
         ],
     },
 }
+
+# 每个源在 core 里覆盖的 CC 方案
+SOURCE_SCHEME = {
+    # 弓弦: 主动态 CC11(energy), 次级 CC2(弓压, tension), 固定弓位 CC4, 有颤音
+    'SWAM': dict(cc_dyn=11, cc_sec=2, bowpos_cc=4, vibrato=True),
+    # CSB 铜管: 主动态 CC1(energy), 次级 CC11(表情, tension), 无弓位, 无颤音
+    'CSB': dict(cc_dyn=1, cc_sec=11, bowpos_cc=None, vibrato=False),
+}
+
+# 该源滑块里默认是否需要 弓位 相关键
 DEFAULT_PRESET = '默认.json'   # 每乐器的默认(种子)预设文件名
 
-# ---- 参数定义: key -> (标签, 最小值, 最大值, 步长, 类型) ----
-PARAMS = [
-    ('amp',        '颤音幅度(±cent)', 5, 120, 1, 'float'),
-    ('attack',     '颤音渐入比例', 0.0, 0.6, 0.01, 'float'),
-    ('release',    '颤音渐出比例', 0.0, 0.6, 0.01, 'float'),
-    ('pbrange',    '弯音范围(半音)', 1, 12, 1, 'float'),
-    ('dyn_lo',     'CC11 动态 下限', 0, 127, 1, 'int'),
-    ('dyn_hi',     'CC11 动态 上限', 0, 127, 1, 'int'),
-    ('bow_lo',     'CC2 弓压 下限', 0, 127, 1, 'int'),
-    ('bow_hi',     'CC2 弓压 上限', 0, 127, 1, 'int'),
-    ('min_sustain', '最短颤音音符(秒)', 0.2, 2.0, 0.05, 'float'),
-    ('bowpos_val', '弓位/把位 CC 值', 0, 127, 1, 'int'),
-    ('instrument', 'MIDI 音色号(GM)', 0, 127, 1, 'int'),
-]
+# 每个源显示哪些滑块键 (顺序即界面顺序)
+SOURCE_PARAM_KEYS = {
+    'SWAM': ['amp', 'attack', 'release', 'pbrange',
+             'dyn_lo', 'dyn_hi', 'sec_lo', 'sec_hi',
+             'min_sustain', 'bowpos_val', 'instrument'],
+    'CSB': ['dyn_lo', 'dyn_hi', 'sec_lo', 'sec_hi', 'instrument'],
+}
+
+# ---- 参数定义 (全部可能的键): key -> (标签, 最小值, 最大值, 步长, 类型) ----
+PARAMDEF = {
+    'amp':        ('颤音幅度(±cent)', 5, 120, 1, 'float'),
+    'attack':     ('颤音渐入比例', 0.0, 0.6, 0.01, 'float'),
+    'release':    ('颤音渐出比例', 0.0, 0.6, 0.01, 'float'),
+    'pbrange':    ('弯音范围(半音)', 1, 12, 1, 'float'),
+    'dyn_lo':     ('动态CC 下限', 0, 127, 1, 'int'),
+    'dyn_hi':     ('动态CC 上限', 0, 127, 1, 'int'),
+    'sec_lo':     ('次级CC 下限', 0, 127, 1, 'int'),
+    'sec_hi':     ('次级CC 上限', 0, 127, 1, 'int'),
+    'min_sustain': ('最短颤音音符(秒)', 0.2, 2.0, 0.05, 'float'),
+    'bowpos_val': ('弓位/把位 CC 值', 0, 127, 1, 'int'),
+    'instrument': ('MIDI 音色号(GM)', 0, 127, 1, 'int'),
+}
+SOURCES = [('SWAM', 'SWAM Solo Strings'), ('CSB', 'Cinematic Studio Brass')]
+
+
 def source_dir(source_id):
     return PRESETS_ROOT / source_id
 
@@ -73,6 +94,7 @@ class App(tk.Tk):
         self._preset_meta = None         # 当前预设的元数据(用于识别)
         self._build()
         self._rescan_sources()
+        self._rebuild_sliders()
         # 默认选中该源第一个乐器,并确保其默认预设存在
         self._init_instrument_dropdown()
         self._load_instrument_default()
@@ -166,27 +188,59 @@ class App(tk.Tk):
         ttk.Entry(row2, textvariable=self.out_var, width=30).pack(side='left', padx=4, fill='x', expand=True)
         ttk.Button(row2, text='浏览…', command=self._pick_out).pack(side='left', padx=4)
 
-        # 3) 参数滑块区
-        gp = ttk.LabelFrame(B, text='④ 参数 (载入预设或手动调整)', padding=8)
-        gp.pack(fill='x', **pad)
-        self.widgets = {}
-        for key, label, vmin, vmax, step, typ in PARAMS:
-            r = ttk.Frame(gp); r.pack(fill='x', pady=2)
-            self.vars[key] = tk.DoubleVar(value=A.DEFAULT[key])
-            ttk.Label(r, text=label, width=26, anchor='w').pack(side='left')
-            s = ttk.Scale(r, from_=vmin, to=vmax, orient='horizontal',
-                          variable=self.vars[key], command=lambda k=key: self._show(k))
-            s.pack(side='left', fill='x', expand=True, padx=6)
-            lbl = ttk.Label(r, text=str(round(A.DEFAULT[key], 2)), width=7, anchor='e')
-            lbl.pack(side='left')
-            self.widgets[key] = (s, lbl)
-        ttk.Button(gp, text='重置为默认', command=self._reset).pack(anchor='e', pady=(6, 0))
+        # 3) 参数滑块区 (按源动态)
+        self.gp = ttk.LabelFrame(B, text='④ 参数 (载入预设或手动调整)', padding=8)
+        self.gp.pack(fill='x', **pad)
+        ttk.Button(self.gp, text='重置为默认', command=self._reset).pack(anchor='e', pady=(6, 0))
+        self._slider_host = ttk.Frame(self.gp)
+        self._slider_host.pack(fill='x')
+        self._slider_host_rows = []
 
         # 4) 动作
         act = ttk.Frame(B); act.pack(fill='x', **pad)
         ttk.Button(act, text='生成 MIDI', command=self._generate).pack(side='left')
         self.status = tk.StringVar(value='就绪')
         ttk.Label(act, textvariable=self.status).pack(side='left', padx=12)
+
+    # ===== 按源动态滑块 =====
+    def _param_labels(self, sid):
+        """返回 {key: 标签};动态CC/次级CC 标签带上实际 CC 号。"""
+        scheme = SOURCE_SCHEME.get(sid, {})
+        cc_dyn = scheme.get('cc_dyn', 11)
+        cc_sec = scheme.get('cc_sec', 2)
+        lab = {}
+        for key, (l, vmin, vmax, step, typ) in PARAMDEF.items():
+            lab[key] = l
+        if 'dyn_lo' in PARAMDEF:
+            lab['dyn_lo'] = f'动态 CC{cc_dyn} 下限'
+            lab['dyn_hi'] = f'动态 CC{cc_dyn} 上限'
+        if 'sec_lo' in PARAMDEF:
+            lab['sec_lo'] = f'次级 CC{cc_sec} 下限'
+            lab['sec_hi'] = f'次级 CC{cc_sec} 上限'
+        return lab
+
+    def _rebuild_sliders(self):
+        """清除并重建当前源所需滑块行。"""
+        sid = self._sid()
+        keys = SOURCE_PARAM_KEYS.get(sid, [])
+        for w in self._slider_host_rows:
+            w.destroy()
+        self._slider_host_rows = []
+        self.widgets = {}
+        labs = self._param_labels(sid)
+        for key in keys:
+            l, vmin, vmax, step, typ = PARAMDEF[key]
+            r = ttk.Frame(self._slider_host); r.pack(fill='x', pady=2)
+            self.vars[key] = tk.DoubleVar(value=A.DEFAULT.get(key, 0))
+            ttk.Label(r, text=labs[key], width=26, anchor='w').pack(side='left')
+            s = ttk.Scale(r, from_=vmin, to=vmax, orient='horizontal',
+                          variable=self.vars[key], command=lambda k=key: self._show(k))
+            s.pack(side='left', fill='x', expand=True, padx=6)
+            lbl = ttk.Label(r, text=str(round(A.DEFAULT.get(key, 0), 2)), width=7, anchor='e')
+            lbl.pack(side='left')
+            self.widgets[key] = (s, lbl)
+            self._slider_host_rows.append(r)
+
 
     # ============ 音源 & 预设树 ============
     def _rescan_sources(self):
@@ -214,6 +268,7 @@ class App(tk.Tk):
 
     def _on_source_change(self):
         self._init_instrument_dropdown()
+        self._rebuild_sliders()
         self._load_instrument_default()
 
     def _on_instrument_change(self):
@@ -244,13 +299,15 @@ class App(tk.Tk):
             self._rescan_preset_tree()
 
     def _ensure_default_preset(self, sid, instrument_name, path):
-        """为该乐器生成默认(种子)预设: 以现滑块值或 core 默认为基, 只把 program 设为该乐器 GM 号。"""
+        """为该乐器生成默认(种子)预设: 以当前源 core 默认参数为基, 只把 program 设为该乐器 GM 号。"""
         prog = self._instrument_program(sid, instrument_name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        vals = dict(self._slider_values())
-        for key, label, vmin, vmax, step, typ in PARAMS:
-            if key not in vals:
-                v = A.DEFAULT[key]
+        base = self._base_cfg(sid)
+        vals = {}
+        for key in self._param_keys(sid):
+            l, vmin, vmax, step, typ = PARAMDEF[key]
+            if key in base:
+                v = base[key]
                 vals[key] = int(round(v)) if typ == 'int' else v
         vals['instrument'] = prog
         fam = SOURCE_INSTRUMENTS[sid]['family']
@@ -357,25 +414,41 @@ class App(tk.Tk):
             if sid == self._cur_source_id(): return name
         return SOURCES[0][1]
 
-    def _read_cfg(self):
+    def _param_keys(self, sid=None):
+        sid = sid or self._sid()
+        return SOURCE_PARAM_KEYS.get(sid, [])
+
+    def _base_cfg(self, sid=None):
+        """当前源完整的 core cfg: core 默认 + 该源 scheme(CC 号等)。"""
+        sid = sid or self._sid()
         cfg = dict(A.DEFAULT)
-        for key, label, vmin, vmax, step, typ in PARAMS:
+        cfg.update(SOURCE_SCHEME.get(sid, {}))
+        return cfg
+
+    def _read_cfg(self):
+        cfg = self._base_cfg()
+        sid = self._sid()
+        for key in self._param_keys(sid):
+            l, vmin, vmax, step, typ = PARAMDEF[key]
             v = self.vars[key].get()
             cfg[key] = int(round(v)) if typ == 'int' else v
         if cfg['dyn_lo'] > cfg['dyn_hi']: cfg['dyn_lo'], cfg['dyn_hi'] = cfg['dyn_hi'], cfg['dyn_lo']
-        if cfg['bow_lo'] > cfg['bow_hi']: cfg['bow_lo'], cfg['bow_hi'] = cfg['bow_hi'], cfg['bow_lo']
+        if cfg['sec_lo'] > cfg['sec_hi']: cfg['sec_lo'], cfg['sec_hi'] = cfg['sec_hi'], cfg['sec_lo']
         return cfg
 
-    def _slider_values(self):
+    def _slider_values(self, sid=None):
         vals = {}
-        for key, label, vmin, vmax, step, typ in PARAMS:
+        for key in self._param_keys(sid):
+            if key not in self.vars: continue
+            l, vmin, vmax, step, typ = PARAMDEF[key]
             v = self.vars[key].get()
             vals[key] = int(round(v)) if typ == 'int' else round(v, 4)
         return vals
 
     def _apply_cfg(self, cfg):
-        for key, label, vmin, vmax, step, typ in PARAMS:
-            if key not in cfg: continue
+        for key in self._param_keys():
+            if key not in self.vars or key not in cfg: continue
+            l, vmin, vmax, step, typ = PARAMDEF[key]
             v = min(max(float(cfg[key]), vmin), vmax)
             self.vars[key].set(v)
             self._show(key)
@@ -526,7 +599,10 @@ class App(tk.Tk):
         if d: self.out_var.set(d)
 
     def _reset(self):
-        for key in self.vars: self.vars[key].set(A.DEFAULT[key]); self._show(key)
+        base = self._base_cfg()
+        for key in self.vars:
+            if key in base:
+                self.vars[key].set(base[key]); self._show(key)
 
     def _generate(self):
         inp = self.inp_var.get().strip()
@@ -535,7 +611,9 @@ class App(tk.Tk):
         outdir = self.out_var.get().strip() or str(APP / 'output')
         os.makedirs(outdir, exist_ok=True)
         base = os.path.splitext(os.path.basename(inp))[0]
-        out = os.path.join(outdir, base + '_swam.mid')
+        sid = self._sid()
+        tag = {'SWAM': '_swam', 'CSB': '_csb'}.get(sid, '')
+        out = os.path.join(outdir, base + tag + '.mid')
         cfg = self._read_cfg()
         self.status.set('生成中…')
         def work():
@@ -550,15 +628,6 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
 
-def _base_params():
-    """core 默认值的 GUI 键子集。"""
-    vals = {}
-    for key, label, vmin, vmax, step, typ in PARAMS:
-        v = A.DEFAULT[key]
-        vals[key] = int(round(v)) if typ == 'int' else v
-    return vals
-
-
 def seed_all_defaults():
     """为所有注册源里的每种乐器生成 默认.json 种子(不存在才建)。返回生成/已存在路径列表。"""
     made = []
@@ -566,12 +635,20 @@ def seed_all_defaults():
         spec = SOURCE_INSTRUMENTS.get(sid)
         if not spec: continue
         fam = spec['family']
+        base = dict(A.DEFAULT)
+        base.update(SOURCE_SCHEME.get(sid, {}))
+        keys = SOURCE_PARAM_KEYS.get(sid, [])
         for inst, prog in spec['instruments']:
             out = source_dir(sid) / fam / inst / DEFAULT_PRESET
             if out.exists():
                 made.append(str(out)); continue
             out.parent.mkdir(parents=True, exist_ok=True)
-            vals = _base_params()
+            vals = {}
+            for key in keys:
+                l, vmin, vmax, step, typ = PARAMDEF[key]
+                if key in base:
+                    v = base[key]
+                    vals[key] = int(round(v)) if typ == 'int' else v
             vals['instrument'] = prog
             data = {'meta': {'source': sid, 'family': fam, 'instrument': inst,
                              'label': f'默认种子(GM {prog}), 待校准'},

@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "source": "CSB",
+    "family": "铜管",
+    "instrument": "长号",
+    "label": "默认种子(GM 57), 待校准"
+  },
+  "params": {
+    "dyn_lo": 0,
+    "dyn_hi": 127,
+    "sec_lo": 45,
+    "sec_hi": 88,
+    "instrument": 57
+  }
+}

@@ -12,8 +12,8 @@
     "pbrange": 2.0,
     "dyn_lo": 0,
     "dyn_hi": 127,
-    "bow_lo": 45,
-    "bow_hi": 88,
+    "sec_lo": 45,
+    "sec_hi": 88,
     "min_sustain": 0.5,
     "bowpos_val": 64,
     "instrument": 40

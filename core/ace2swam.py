@@ -9,10 +9,11 @@ import zstandard, mido
 
 DEFAULT = {
     'amp':30.0, 'attack':0.20, 'release':0.15, 'pbrange':2.0,
-    'dyn_lo':0, 'dyn_hi':127, 'bow_lo':45, 'bow_hi':88,
+    'dyn_lo':0, 'dyn_hi':127, 'sec_lo':45, 'sec_hi':88,
     'min_sustain':0.5, 'vib_min_hz':4.0, 'vib_max_hz':8.0,
     'rms_thr':0.15, 'clamp':6.0, 'instrument':40, 'ppq':480,
     'bowpos_cc':4, 'bowpos_val':64,
+    'cc_dyn':11, 'cc_sec':2, 'vibrato':True,
 }
 
 class CBOR:
@@ -111,6 +112,14 @@ def _pb_lsb(cent, lsb): return int(max(-8192,min(8191,round(cent*lsb))))
 
 def convert(prj, cfg=None):
     cfg=dict(DEFAULT if cfg is None else {**DEFAULT,**cfg})
+    # ---- 音源 CC 方案 (可由 GUI 覆盖) ----
+    # cc_dyn:  主动态 CC(接 mambaEnergy)  默认 SWAM 弦乐 = 11
+    # cc_sec:  次级 CC(接 mambaTension)   默认 SWAM 弦乐 = 2 (弓压)
+    # bowpos_cc/value: 固定弓位 CC(可为 None 关闭)
+    # vibrato: 是否做 pitchDelta -> pitch bend 颤音
+    cc_dyn=int(cfg.get('cc_dyn',11)); cc_sec=cfg.get('cc_sec',2)
+    bowpos_cc=cfg.get('bowpos_cc',4); bowpos_val=int(cfg.get('bowpos_val',64))
+    vibrato=bool(cfg.get('vibrato', True))
     pats=[p for t in prj['tracks'] if t.get('type')=='sing' for p in t.get('patterns',[]) if p.get('notes')]
     if not pats: raise ValueError('no vocal pattern with notes')
     pat=max(pats,key=lambda p:len(p['notes']))
@@ -125,19 +134,19 @@ def convert(prj, cfg=None):
     lsb=8192.0/(cfg['pbrange']*100)
     amp=cfg['amp']; attack=cfg['attack']; release=cfg['release']
     msgs=[]; base=notes[0]['pos']; t_end=max(n['pos']+n['dur'] for n in notes)
-    # Bow/Pizz position: one fixed value over whole song (CC default 4)
-    msgs.append((0, mido.Message('control_change', control=int(cfg.get('bowpos_cc',4)), value=int(cfg.get('bowpos_val',64)))))
+    if bowpos_cc is not None:
+        msgs.append((0, mido.Message('control_change', control=int(bowpos_cc), value=bowpos_val)))
     e_prev=t_prev=None
     for ta in range(base,t_end+1,10):
         tk=ta-base
         if ta in e_m:
             v=e_m[ta]; norm=max(0,min(1,(v-emin)/(emax-emin)))
             cv=int(round(cfg['dyn_lo']+norm*(cfg['dyn_hi']-cfg['dyn_lo'])))
-            if cv!=e_prev: msgs.append((tk,mido.Message('control_change',control=11,value=cv))); e_prev=cv
+            if cv!=e_prev: msgs.append((tk,mido.Message('control_change',control=cc_dyn,value=cv))); e_prev=cv
         if ta in t_m:
             v=t_m[ta]; norm=max(0,min(1,(v-tmin)/(tmax-tmin)))
-            cv=int(round(cfg['bow_lo']+norm*(cfg['bow_hi']-cfg['bow_lo'])))
-            if cv!=t_prev: msgs.append((tk,mido.Message('control_change',control=2,value=cv))); t_prev=cv
+            cv=int(round(cfg['sec_lo']+norm*(cfg['sec_hi']-cfg['sec_lo'])))
+            if cv!=t_prev: msgs.append((tk,mido.Message('control_change',control=cc_sec,value=cv))); t_prev=cv
     for n in notes:
         pos=n['pos']; end=n['pos']+n['dur']; pitch=n['pitch']
         acc=[e_m[t] for t in range(pos,end) if t in e_m]
@@ -147,30 +156,31 @@ def convert(prj, cfg=None):
         msgs.append((p0,mido.Message('note_on',note=pitch,velocity=max(1,vel))))
         msgs.append((p1,mido.Message('note_off',note=pitch,velocity=0)))
     pb_notes=0
-    for n in notes:
-        pos=n['pos']; end=n['pos']+n['dur']
-        if (end-pos)/tps < cfg['min_sustain']: continue
-        abs_ticks=[t for t in range(pos,end) if t in p_m]
-        vals=[p_m[t] for t in abs_ticks]
-        centered=_detect_vibrato_curve(vals,tps,cfg)
-        if centered is None: continue
-        nv=len(centered)
-        mid=centered[int(nv*0.2):int(nv*0.8)] if nv>50 else centered
-        rms=math.sqrt(sum(x*x for x in mid)/len(mid)) if mid else 1
-        gain=(amp/2.0)/rms if rms>0 else 0
-        p0=pos-base; p1=end-base
-        msgs.append((p0, mido.Message('pitchwheel',pitch=0)))
-        step=max(1,nv//700)
-        atk=int(nv*attack); rel=int(nv*release)
-        for i in range(0,nv,step):
-            env=1.0
-            if i<atk: env=float(i)/atk if atk>0 else 1.0
-            elif i>nv-rel: env=max(0.0,float(nv-i)/rel) if rel>0 else 0.0
-            cent=max(-amp,min(amp,centered[i]*gain*env))
-            ti=abs_ticks[i] if i<len(abs_ticks) else pos
-            msgs.append((ti-base, mido.Message('pitchwheel',pitch=_pb_lsb(cent,lsb))))
-        msgs.append((p1-2 if p1-2>p0 else p0, mido.Message('pitchwheel',pitch=0)))
-        pb_notes+=1
+    if vibrato:
+        for n in notes:
+            pos=n['pos']; end=n['pos']+n['dur']
+            if (end-pos)/tps < cfg['min_sustain']: continue
+            abs_ticks=[t for t in range(pos,end) if t in p_m]
+            vals=[p_m[t] for t in abs_ticks]
+            centered=_detect_vibrato_curve(vals,tps,cfg)
+            if centered is None: continue
+            nv=len(centered)
+            mid=centered[int(nv*0.2):int(nv*0.8)] if nv>50 else centered
+            rms=math.sqrt(sum(x*x for x in mid)/len(mid)) if mid else 1
+            gain=(amp/2.0)/rms if rms>0 else 0
+            p0=pos-base; p1=end-base
+            msgs.append((p0, mido.Message('pitchwheel',pitch=0)))
+            step=max(1,nv//700)
+            atk=int(nv*attack); rel=int(nv*release)
+            for i in range(0,nv,step):
+                env=1.0
+                if i<atk: env=float(i)/atk if atk>0 else 1.0
+                elif i>nv-rel: env=max(0.0,float(nv-i)/rel) if rel>0 else 0.0
+                cent=max(-amp,min(amp,centered[i]*gain*env))
+                ti=abs_ticks[i] if i<len(abs_ticks) else pos
+                msgs.append((ti-base, mido.Message('pitchwheel',pitch=_pb_lsb(cent,lsb))))
+            msgs.append((p1-2 if p1-2>p0 else p0, mido.Message('pitchwheel',pitch=0)))
+            pb_notes+=1
     msgs.sort(key=lambda x:x[0])
     mf=mido.MidiFile(type=1,ticks_per_beat=ppq)
     tr0=mido.MidiTrack(); mf.tracks.append(tr0)
